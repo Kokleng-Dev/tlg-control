@@ -3,10 +3,10 @@ import uvicorn
 from fastapi import FastAPI, Depends, HTTPException, Request, Path, Body
 from pydantic import BaseModel
 from core.db import Base, engine, get_session, AsyncSession
-from models import Bot, Chat, User, Membership
+from models import Bot, Chat, User, ChatMember
 from crud import (
-    create_or_update_bot, upsert_chat, upsert_user, upsert_membership,
-    log_action, list_chats_for_bot, list_members_in_chat, get_bot_by_id,
+    create_or_update_bot, upsert_chat, upsert_user, upsert_chat_member,
+    log_action, list_chats_for_bot, list_chat_members_in_chat, get_bot_by_id,
     get_chat_by_telegram_id, get_user_by_telegram_id
 )
 from telegram_api import (
@@ -66,13 +66,13 @@ async def discover_chats_from_updates(bot: Bot, session: AsyncSession):
                         if obj.get("new_chat_members"):
                             for new_u in obj["new_chat_members"]:
                                 user = await upsert_user(session, new_u)
-                                await upsert_membership(session, bot, chat, user, status="member", role="member")
+                                await upsert_chat_member(session, bot, chat, user, status="member", role="member")
 
                         # Handle left members
                         if obj.get("left_chat_member"):
                             left = obj["left_chat_member"]
                             user = await upsert_user(session, left)
-                            await upsert_membership(session, bot, chat, user, status="left", role="left")
+                            await upsert_chat_member(session, bot, chat, user, status="left", role="left")
                     break
     except Exception as e:
         print(f"Error discovering chats: {e}")
@@ -113,7 +113,7 @@ async def sync_chat_members(bot: Bot, chat: Chat, session: AsyncSession):
             role = role_map.get(status, "member")
             member_status = "member" if status in ("creator", "administrator", "member") else status
 
-            await upsert_membership(session, bot, chat, user, status=member_status, role=role)
+            await upsert_chat_member(session, bot, chat, user, status=member_status, role=role)
             admin_count += 1
 
         # Get member count
@@ -336,14 +336,14 @@ async def webhook_handler(
             for new_u in message["new_chat_members"]:
                 user = await upsert_user(session, new_u)
                 if ch:
-                    await upsert_membership(session, bot, ch, user, status="member", role="member")
+                    await upsert_chat_member(session, bot, ch, user, status="member", role="member")
                     await log_action(session, bot, ch, new_u.get("id"), "join", payload=str(message))
 
         if message.get("left_chat_member"):
             left = message["left_chat_member"]
             user = await upsert_user(session, left)
             if ch:
-                await upsert_membership(session, bot, ch, user, status="left", role="left")
+                await upsert_chat_member(session, bot, ch, user, status="left", role="left")
                 await log_action(session, bot, ch, left.get("id"), "left", payload=str(message))
 
     # CHAT_MEMBER: detects member status changes
@@ -360,10 +360,10 @@ async def webhook_handler(
             user = await upsert_user(session, user_obj)
             if status in ("member", "administrator", "creator"):
                 role = status
-                await upsert_membership(session, bot, ch, user, status="member", role=role)
+                await upsert_chat_member(session, bot, ch, user, status="member", role=role)
                 await log_action(session, bot, ch, user.telegram_user_id, "chat_member_update", payload=str(cm))
             elif status in ("left", "kicked"):
-                await upsert_membership(session, bot, ch, user, status="left", role="left")
+                await upsert_chat_member(session, bot, ch, user, status="left", role="left")
                 await log_action(session, bot, ch, user.telegram_user_id, "chat_member_update_left", payload=str(cm))
 
     # MY_CHAT_MEMBER: changes to the bot's status in the chat
@@ -407,7 +407,7 @@ async def list_members(
     bot = await get_bot_by_id(session, bot_id)
     if not bot:
         raise HTTPException(status_code=404, detail="bot not found")
-    members = await list_members_in_chat(session, bot, chat_telegram_id)
+    members = await list_chat_members_in_chat(session, bot, chat_telegram_id)
     out = []
     for m in members:
         out.append({
@@ -444,7 +444,7 @@ async def ban_user(bot_id: int, body: ModifyUserIn, session: AsyncSession = Depe
 
     user = await get_user_by_telegram_id(session, body.user_id)
     if user and chat:
-        await upsert_membership(session, bot, chat, user, status="banned", role="kicked")
+        await upsert_chat_member(session, bot, chat, user, status="banned", role="kicked")
 
     return {"ok": True, "response": resp}
 
@@ -464,7 +464,7 @@ async def unban_user(bot_id: int, body: ModifyUserIn, session: AsyncSession = De
 
     user = await get_user_by_telegram_id(session, body.user_id)
     if user and chat:
-        await upsert_membership(session, bot, chat, user, status="left", role="left")
+        await upsert_chat_member(session, bot, chat, user, status="left", role="left")
 
     return {"ok": True, "response": resp}
 
@@ -495,7 +495,7 @@ async def mute_user(bot_id: int, body: ModifyUserIn, session: AsyncSession = Dep
 
     user = await get_user_by_telegram_id(session, body.user_id)
     if user and chat:
-        membership = await upsert_membership(session, bot, chat, user, status="restricted", role="restricted")
+        membership = await upsert_chat_member(session, bot, chat, user, status="restricted", role="restricted")
         membership.is_muted = True
         await session.commit()
 
@@ -524,7 +524,7 @@ async def unmute_user(bot_id: int, body: ModifyUserIn, session: AsyncSession = D
 
     user = await get_user_by_telegram_id(session, body.user_id)
     if user and chat:
-        membership = await upsert_membership(session, bot, chat, user, status="member", role="member")
+        membership = await upsert_chat_member(session, bot, chat, user, status="member", role="member")
         membership.is_muted = False
         await session.commit()
 
@@ -551,7 +551,7 @@ async def kick_user(bot_id: int, body: ModifyUserIn, session: AsyncSession = Dep
 
     user = await get_user_by_telegram_id(session, body.user_id)
     if user and chat:
-        await upsert_membership(session, bot, chat, user, status="left", role="left")
+        await upsert_chat_member(session, bot, chat, user, status="left", role="left")
 
     return {"ok": True, "response": unban_resp}
 
@@ -567,7 +567,7 @@ async def get_bot_info(bot_id: int, session: AsyncSession = Depends(get_session)
     chats = await list_chats_for_bot(session, bot)
     total_members = 0
     for chat in chats:
-        members = await list_members_in_chat(session, bot, chat.telegram_chat_id)
+        members = await list_chat_members_in_chat(session, bot, chat.telegram_chat_id)
         total_members += len(members)
 
     return {

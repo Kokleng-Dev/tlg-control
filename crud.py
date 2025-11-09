@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
 from typing import Optional, List
-from models import Bot, Chat, User, Membership, ActionLog
+from models import Bot, Chat, User, ChatMember, ActionLog
 
 async def create_or_update_bot(session: AsyncSession, telegram_id: int, username: str, token: str) -> Bot:
     q = await session.execute(select(Bot).where(Bot.telegram_id == telegram_id))
@@ -74,29 +74,40 @@ async def upsert_user(session: AsyncSession, user_obj: dict) -> User:
     await session.refresh(user)
     return user
 
-async def upsert_membership(session: AsyncSession, bot: Bot, chat: Chat, user: User, status: str = "member", role: str = "member"):
-    q = await session.execute(select(Membership).where(
-        Membership.bot_id == bot.id,
-        Membership.chat_id == chat.id,
-        Membership.user_id == user.id
+async def upsert_chat_member(session: AsyncSession, bot: Bot, chat: Chat, user: User, status: str = "member", role: str = "member"):
+    """
+    Create or update a chat member record.
+    This tracks a user's membership in a specific chat.
+    """
+    q = await session.execute(select(ChatMember).where(
+        ChatMember.bot_id == bot.id,
+        ChatMember.chat_id == chat.id,
+        ChatMember.user_id == user.id
     ))
-    membership = q.scalars().first()
+    chat_member = q.scalars().first()
     now = datetime.now(timezone.utc)
-    if not membership:
-        membership = Membership(
-            bot_id=bot.id, chat_id=chat.id, user_id=user.id,
-            status=status, role=role, joined_at=now, last_seen=now
+
+    if not chat_member:
+        chat_member = ChatMember(
+            bot_id=bot.id,
+            chat_id=chat.id,
+            user_id=user.id,
+            status=status,
+            role=role,
+            joined_at=now,
+            last_seen=now
         )
-        session.add(membership)
+        session.add(chat_member)
     else:
-        membership.role = role or membership.role
-        membership.status = status or membership.status
-        membership.last_seen = now
+        chat_member.role = role or chat_member.role
+        chat_member.status = status or chat_member.status
+        chat_member.last_seen = now
         if status == "left":
-            membership.left_at = now
+            chat_member.left_at = now
+
     await session.commit()
-    await session.refresh(membership)
-    return membership
+    await session.refresh(chat_member)
+    return chat_member
 
 async def log_action(session: AsyncSession, bot: Bot, chat: Optional[Chat], user_telegram_id: Optional[int], action: str, reason: Optional[str]=None, payload: Optional[str]=None):
     entry = ActionLog(
@@ -116,18 +127,21 @@ async def list_chats_for_bot(session: AsyncSession, bot: Bot):
     q = await session.execute(select(Chat).where(Chat.bot_id == bot.id))
     return q.scalars().all()
 
-async def list_members_in_chat(session: AsyncSession, bot: Bot, chat_telegram_id: int):
+async def list_chat_members_in_chat(session: AsyncSession, bot: Bot, chat_telegram_id: int):
+    """Get all members in a specific chat"""
     q = await session.execute(
-        select(Membership)
+        select(ChatMember)
         .join(Chat)
         .join(User)
         .where(
-            Membership.bot_id == bot.id,
+            ChatMember.bot_id == bot.id,
             Chat.telegram_chat_id == chat_telegram_id
         )
     )
     return q.scalars().all()
 
+
 async def get_user_by_telegram_id(session: AsyncSession, telegram_user_id: int) -> Optional[User]:
+    """Get a user by their Telegram user ID"""
     q = await session.execute(select(User).where(User.telegram_user_id == telegram_user_id))
     return q.scalars().first()

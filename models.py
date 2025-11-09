@@ -13,7 +13,7 @@ class Bot(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     chats = relationship("Chat", back_populates="bot", cascade="all, delete-orphan")
-    memberships = relationship("Membership", back_populates="bot")
+    chat_members = relationship("ChatMember", back_populates="bot")
     logs = relationship("ActionLog", back_populates="bot")
 
 class Chat(Base):
@@ -27,7 +27,7 @@ class Chat(Base):
     last_seen = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     bot = relationship("Bot", back_populates="chats")
-    memberships = relationship("Membership", back_populates="chat")
+    chat_members = relationship("ChatMember", back_populates="chat")
     logs = relationship("ActionLog", back_populates="chat")
 
 class User(Base):
@@ -39,25 +39,29 @@ class User(Base):
     username = Column(String(255), nullable=True)
     is_bot = Column(Boolean, default=False)
 
-    memberships = relationship("Membership", back_populates="user")
+    chat_members = relationship("ChatMember", back_populates="user")
 
-class Membership(Base):
-    __tablename__ = "memberships"
+class ChatMember(Base):
+    """
+    Represents a user's membership in a chat for a specific bot.
+    Tracks their role, status, and activity timestamps.
+    """
+    __tablename__ = "chat_members"
     id = Column(BigInteger, primary_key=True, index=True)
     bot_id = Column(BigInteger, ForeignKey("bots.id", ondelete="CASCADE"))
     chat_id = Column(BigInteger, ForeignKey("chats.id", ondelete="CASCADE"))
     user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
 
-    role = Column(String(50), default="member")
-    status = Column(String(50), default="member")  # member / left / banned / restricted
+    role = Column(String(50), default="member")  # creator, administrator, member, restricted, left, kicked
+    status = Column(String(50), default="member")  # member, left, banned, restricted
     is_muted = Column(Boolean, default=False)
     joined_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     left_at = Column(DateTime(timezone=True), nullable=True)
     last_seen = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-    bot = relationship("Bot", back_populates="memberships")
-    chat = relationship("Chat", back_populates="memberships")
-    user = relationship("User", back_populates="memberships")
+    bot = relationship("Bot", back_populates="chat_members")
+    chat = relationship("Chat", back_populates="chat_members")
+    user = relationship("User", back_populates="chat_members")
 
 class ActionLog(Base):
     __tablename__ = "action_logs"
