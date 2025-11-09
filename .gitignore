@@ -1,0 +1,49 @@
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg
+*.egg-info
+*.whl
+*.dist-info
+*.build
+*.env
+.tox
+.venv
+.venv3
+.env3
+.env
+.eggs
+.egg-info
+.local
+.mypy_cache
+.pytest_cache
+.ipynb_checkpoints
+.ipynb_log
+
+# FastAPI
+.fastapi
+.fastapi uvicorn
+
+# SQLAlchemy
+sqlalchemy
+alembic
+
+# Others
+node_modules
+.env.local
+.env.prod
+.env.dev
+.env.test
+.env.stg
+.env.prod.db
+.env.prod.secret
+.env.dev.db
+.env.dev.secret
+.env.test.db
+.env.test.secret
+.env.stg.db
+.env.stg.secret
+
+#db
+telegram_control.db
