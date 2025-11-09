@@ -74,11 +74,15 @@ async def upsert_user(session: AsyncSession, user_obj: dict) -> User:
     await session.refresh(user)
     return user
 
-async def upsert_chat_member(session: AsyncSession, bot: Bot, chat: Chat, user: User, status: str = "member", role: str = "member"):
-    """
-    Create or update a chat member record.
-    This tracks a user's membership in a specific chat.
-    """
+async def upsert_chat_member(
+    session: AsyncSession,
+    bot: Bot,
+    chat: Chat,
+    user: User,
+    status: str = "member",
+    role: str = "member"
+) -> ChatMember:
+    """Create or update a chat member record"""
     q = await session.execute(select(ChatMember).where(
         ChatMember.bot_id == bot.id,
         ChatMember.chat_id == chat.id,
@@ -94,6 +98,7 @@ async def upsert_chat_member(session: AsyncSession, bot: Bot, chat: Chat, user: 
             user_id=user.id,
             status=status,
             role=role,
+            is_bot=user.is_bot,  # ✅ Copy from user table
             joined_at=now,
             last_seen=now
         )
@@ -101,6 +106,7 @@ async def upsert_chat_member(session: AsyncSession, bot: Bot, chat: Chat, user: 
     else:
         chat_member.role = role or chat_member.role
         chat_member.status = status or chat_member.status
+        chat_member.is_bot = user.is_bot  # ✅ Keep it synced
         chat_member.last_seen = now
         if status == "left":
             chat_member.left_at = now
@@ -108,6 +114,51 @@ async def upsert_chat_member(session: AsyncSession, bot: Bot, chat: Chat, user: 
     await session.commit()
     await session.refresh(chat_member)
     return chat_member
+
+
+# ✅ NEW: Helper to get only bots in a chat
+async def list_bots_in_chat(session: AsyncSession, bot: Bot, chat_telegram_id: int) -> List[ChatMember]:
+    """Get all bots in a specific chat"""
+    q = await session.execute(
+        select(ChatMember)
+        .join(Chat)
+        .where(
+            ChatMember.bot_id == bot.id,
+            Chat.telegram_chat_id == chat_telegram_id,
+            ChatMember.is_bot == True  # ✅ Direct filter, no JOIN needed
+        )
+    )
+    return q.scalars().all()
+
+
+# ✅ NEW: Helper to get only humans in a chat
+async def list_humans_in_chat(session: AsyncSession, bot: Bot, chat_telegram_id: int) -> List[ChatMember]:
+    """Get all human users in a specific chat"""
+    q = await session.execute(
+        select(ChatMember)
+        .join(Chat)
+        .where(
+            ChatMember.bot_id == bot.id,
+            Chat.telegram_chat_id == chat_telegram_id,
+            ChatMember.is_bot == False  # ✅ Direct filter
+        )
+    )
+    return q.scalars().all()
+
+
+# ✅ NEW: Helper to get all admins (humans or bots)
+async def list_admins_in_chat(session: AsyncSession, bot: Bot, chat_telegram_id: int) -> List[ChatMember]:
+    """Get all administrators in a chat"""
+    q = await session.execute(
+        select(ChatMember)
+        .join(Chat)
+        .where(
+            ChatMember.bot_id == bot.id,
+            Chat.telegram_chat_id == chat_telegram_id,
+            ChatMember.role.in_(["creator", "administrator"])
+        )
+    )
+    return q.scalars().all()
 
 async def log_action(session: AsyncSession, bot: Bot, chat: Optional[Chat], user_telegram_id: Optional[int], action: str, reason: Optional[str]=None, payload: Optional[str]=None):
     entry = ActionLog(

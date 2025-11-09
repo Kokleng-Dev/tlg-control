@@ -54,6 +54,7 @@ class ChatMember(Base):
 
     role = Column(String(50), default="member")  # creator, administrator, member, restricted, left, kicked
     status = Column(String(50), default="member")  # member, left, banned, restricted
+    is_bot = Column(Boolean, default=False, index=True)  # ✅ NEW: Denormalized for performance
     is_muted = Column(Boolean, default=False)
     joined_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     left_at = Column(DateTime(timezone=True), nullable=True)

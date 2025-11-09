@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from core.db import Base, engine, get_session, AsyncSession
 from models import Bot, Chat, User, ChatMember
 from crud import (
-    create_or_update_bot, upsert_chat, upsert_user, upsert_chat_member,
+    create_or_update_bot, list_admins_in_chat, list_bots_in_chat, list_humans_in_chat, upsert_chat, upsert_user, upsert_chat_member,
     log_action, list_chats_for_bot, list_chat_members_in_chat, get_bot_by_id,
     get_chat_by_telegram_id, get_user_by_telegram_id
 )
@@ -397,32 +397,139 @@ async def list_chats(bot_id: int, session: AsyncSession = Depends(get_session)):
         ]
     }
 
+
 # ---------- List members in a chat (from DB) ----------
 @app.get("/bots/{bot_id}/chats/{chat_telegram_id}/members")
 async def list_members(
     bot_id: int,
     chat_telegram_id: int,
+    filter_type: Optional[str] = None,  # ✅ NEW: "bots", "humans", "admins"
     session: AsyncSession = Depends(get_session)
 ):
+    """
+    List all members in a chat with optional filtering.
+
+    Query params:
+    - filter_type: "bots" | "humans" | "admins" | null (all)
+    """
     bot = await get_bot_by_id(session, bot_id)
     if not bot:
         raise HTTPException(status_code=404, detail="bot not found")
-    members = await list_chat_members_in_chat(session, bot, chat_telegram_id)
+
+    # ✅ Use optimized functions based on filter
+    if filter_type == "bots":
+        members = await list_bots_in_chat(session, bot, chat_telegram_id)
+    elif filter_type == "humans":
+        members = await list_humans_in_chat(session, bot, chat_telegram_id)
+    elif filter_type == "admins":
+        members = await list_admins_in_chat(session, bot, chat_telegram_id)
+    else:
+        members = await list_chat_members_in_chat(session, bot, chat_telegram_id)
+
     out = []
     for m in members:
+        badges = []
+        badge_color = "gray"
+
+        # Use is_bot from chat_members table directly! ✅
+        is_bot = m.is_bot
+        is_current_bot = (m.user.telegram_user_id == bot.telegram_id)
+
+        # Role badges
+        if m.role == "creator":
+            badges.append("OWNER")
+            badge_color = "red"
+        elif m.role == "administrator":
+            badges.append("ADMIN")
+            badge_color = "blue"
+
+        # Bot indicator
+        if is_bot:
+            badges.append("BOT")
+            if not badges or badges == ["BOT"]:
+                badge_color = "green"
+            else:
+                badge_color = "purple"
+
+        if is_current_bot:
+            badges.append("THIS BOT")
+
+        # Status badges
+        if m.is_muted:
+            badges.append("MUTED")
+        if m.status == "banned":
+            badges.append("BANNED")
+            badge_color = "black"
+        elif m.status == "restricted":
+            badges.append("RESTRICTED")
+            badge_color = "orange"
+        elif m.status == "left":
+            badges.append("LEFT")
+            badge_color = "gray"
+
         out.append({
             "user_telegram_id": m.user.telegram_user_id,
             "username": m.user.username,
             "first_name": m.user.first_name,
             "last_name": m.user.last_name,
+            "full_name": f"{m.user.first_name or ''} {m.user.last_name or ''}".strip(),
+            "is_bot": is_bot,  # ✅ From chat_members table directly
+            "is_current_bot": is_current_bot,
             "role": m.role,
             "status": m.status,
             "is_muted": m.is_muted,
+            "badges": badges,
+            "badge_color": badge_color,
             "joined_at": m.joined_at.isoformat() if m.joined_at else None,
             "left_at": m.left_at.isoformat() if m.left_at else None,
             "last_seen": m.last_seen.isoformat() if m.last_seen else None,
         })
-    return {"members": out}
+
+    # Sort
+    def sort_key(member):
+        if member["is_current_bot"]:
+            return (0, member["full_name"])
+        role_priority = {"creator": 1, "administrator": 2, "member": 3}
+        return (role_priority.get(member["role"], 99), member["full_name"])
+
+    out.sort(key=sort_key)
+
+    return {"members": out, "total": len(out)}
+
+# ✅ NEW: Get statistics about chat members
+@app.get("/bots/{bot_id}/chats/{chat_telegram_id}/stats")
+async def get_chat_stats(
+    bot_id: int,
+    chat_telegram_id: int,
+    session: AsyncSession = Depends(get_session)
+):
+    """Get statistics about chat members"""
+    bot = await get_bot_by_id(session, bot_id)
+    if not bot:
+        raise HTTPException(status_code=404, detail="bot not found")
+
+    # Fast queries using is_bot index
+    all_members = await list_chat_members_in_chat(session, bot, chat_telegram_id)
+    bots = await list_bots_in_chat(session, bot, chat_telegram_id)
+    humans = await list_humans_in_chat(session, bot, chat_telegram_id)
+    admins = await list_admins_in_chat(session, bot, chat_telegram_id)
+
+    # Count by status
+    active = [m for m in all_members if m.status == "member"]
+    left = [m for m in all_members if m.status == "left"]
+    banned = [m for m in all_members if m.status == "banned"]
+    muted = [m for m in all_members if m.is_muted]
+
+    return {
+        "total_members": len(all_members),
+        "total_bots": len(bots),
+        "total_humans": len(humans),
+        "total_admins": len(admins),
+        "active_members": len(active),
+        "left_members": len(left),
+        "banned_members": len(banned),
+        "muted_members": len(muted),
+    }
 
 # ---------- Ban ----------
 @app.post("/bots/{bot_id}/ban")
