@@ -1,77 +1,74 @@
 # models.py
-from sqlalchemy import (
-    Column, Integer, String, DateTime, Boolean, Text, ForeignKey, UniqueConstraint
-)
+from sqlalchemy import Column, BigInteger, String, DateTime, Boolean, ForeignKey, Text
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from core.db import Base
 
 class Bot(Base):
     __tablename__ = "bots"
-    id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(Integer, unique=True, index=True, nullable=False)
-    username = Column(String, nullable=True)
-    token = Column(Text, nullable=False)  # <-- encrypt in production
-    created_at = Column(DateTime, default=datetime.utcnow)
+    id = Column(BigInteger, primary_key=True, index=True)
+    telegram_id = Column(BigInteger, unique=True, index=True)
+    username = Column(String(255))
+    token = Column(String(255))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     chats = relationship("Chat", back_populates="bot", cascade="all, delete-orphan")
-    actions = relationship("ActionLog", back_populates="bot")
+    memberships = relationship("Membership", back_populates="bot")
+    logs = relationship("ActionLog", back_populates="bot")
 
 class Chat(Base):
     __tablename__ = "chats"
-    id = Column(Integer, primary_key=True, index=True)
-    bot_id = Column(Integer, ForeignKey("bots.id", ondelete="CASCADE"), nullable=False)
-    telegram_chat_id = Column(Integer, nullable=False, index=True)
-    title = Column(String, nullable=True)
-    type = Column(String, nullable=True)
-    username = Column(String, nullable=True)
-    last_seen = Column(DateTime, default=datetime.utcnow)
+    id = Column(BigInteger, primary_key=True, index=True)
+    bot_id = Column(BigInteger, ForeignKey("bots.id", ondelete="CASCADE"))
+    telegram_chat_id = Column(BigInteger, index=True)
+    title = Column(String(255))
+    type = Column(String(50))
+    username = Column(String(255), nullable=True)
+    last_seen = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     bot = relationship("Bot", back_populates="chats")
-    memberships = relationship("Membership", back_populates="chat", cascade="all, delete-orphan")
-
-    __table_args__ = (UniqueConstraint("bot_id", "telegram_chat_id", name="uix_bot_chat"),)
+    memberships = relationship("Membership", back_populates="chat")
+    logs = relationship("ActionLog", back_populates="chat")
 
 class User(Base):
     __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    telegram_user_id = Column(Integer, unique=True, index=True, nullable=False)
-    first_name = Column(String, nullable=True)
-    last_name = Column(String, nullable=True)
-    username = Column(String, nullable=True)
+    id = Column(BigInteger, primary_key=True, index=True)
+    telegram_user_id = Column(BigInteger, unique=True, index=True)
+    first_name = Column(String(255))
+    last_name = Column(String(255))
+    username = Column(String(255), nullable=True)
     is_bot = Column(Boolean, default=False)
 
-    memberships = relationship("Membership", back_populates="user", cascade="all, delete-orphan")
+    memberships = relationship("Membership", back_populates="user")
 
 class Membership(Base):
     __tablename__ = "memberships"
-    id = Column(Integer, primary_key=True, index=True)
-    bot_id = Column(Integer, nullable=False)
-    chat_id = Column(Integer, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(BigInteger, primary_key=True, index=True)
+    bot_id = Column(BigInteger, ForeignKey("bots.id", ondelete="CASCADE"))
+    chat_id = Column(BigInteger, ForeignKey("chats.id", ondelete="CASCADE"))
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
 
-    status = Column(String, default="member")  # member, left, restricted, banned
-    role = Column(String, default="member")  # creator, administrator, member, restricted, left, kicked
+    role = Column(String(50), default="member")
+    status = Column(String(50), default="member")  # member / left / banned / restricted
     is_muted = Column(Boolean, default=False)
+    joined_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    left_at = Column(DateTime(timezone=True), nullable=True)
+    last_seen = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-    joined_at = Column(DateTime, default=datetime.utcnow)
-    left_at = Column(DateTime, nullable=True)
-    last_seen = Column(DateTime, default=datetime.utcnow)
-
-    user = relationship("User", back_populates="memberships")
+    bot = relationship("Bot", back_populates="memberships")
     chat = relationship("Chat", back_populates="memberships")
-
-    __table_args__ = (UniqueConstraint("bot_id", "chat_id", "user_id", name="uix_membership"),)
+    user = relationship("User", back_populates="memberships")
 
 class ActionLog(Base):
     __tablename__ = "action_logs"
-    id = Column(Integer, primary_key=True, index=True)
-    bot_id = Column(Integer, ForeignKey("bots.id", ondelete="CASCADE"), nullable=False)
-    chat_id = Column(Integer, ForeignKey("chats.id", ondelete="SET NULL"), nullable=True)
-    user_telegram_id = Column(Integer, nullable=True)
-    action = Column(String, nullable=False)  # ban, unban, mute, unmute, join, left, role_change...
-    reason = Column(String, nullable=True)
+    id = Column(BigInteger, primary_key=True, index=True)
+    bot_id = Column(BigInteger, ForeignKey("bots.id", ondelete="CASCADE"))
+    chat_id = Column(BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), nullable=True)
+    user_telegram_id = Column(BigInteger, nullable=True)
+    action = Column(String(100))
+    reason = Column(String(255), nullable=True)
     payload = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-    bot = relationship("Bot", back_populates="actions")
+    bot = relationship("Bot", back_populates="logs")
+    chat = relationship("Chat", back_populates="logs")
